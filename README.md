@@ -53,7 +53,7 @@ To be asked every time before a comment, status change or assignment, add the wr
 uv run pytest
 ```
 
-The tests run the write tools against a fake Taiga; they make no network call.
+The tests run the tools against a fake Taiga; they make no network call.
 
 ## Licence
 

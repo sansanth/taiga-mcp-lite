@@ -1,4 +1,5 @@
-"""A small Taiga MCP server for Claude Code: list issues, read one with its comments and screenshots, comment, change status.
+"""A small Taiga MCP server for Claude Code: list issues, read one with its comments and screenshots, comment, change status,
+assign.
 
 Runs over stdio, started by Claude Code when needed, so there is no server to keep alive and no open port. The Taiga login comes
 from the .env beside this file (TAIGA_BASE_URL, TAIGA_USERNAME, TAIGA_PASSWORD) and is never returned by a tool.
@@ -23,6 +24,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 MAX_IMAGES = 6
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
 IMAGE_TYPES = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".gif": "gif", ".webp": "webp"}
+NOBODY = ("unassigned", "nobody", "none")
 
 
 def _api_root(base: str) -> str:
@@ -60,7 +62,9 @@ class Taiga:
         raise AssertionError("unreachable")
 
     async def download(self, url: str) -> bytes:
-        r = await self._client.get(url, headers={"Authorization": f"Bearer {self._token}"} if self._token else None)
+        # Media can be on another host (S3, a CDN), and its URL carries its own access token.
+        ours = httpx.URL(url).host == self._client.base_url.host
+        r = await self._client.get(url, headers={"Authorization": f"Bearer {self._token}"} if self._token and ours else None)
         r.raise_for_status()
         return r.content
 
@@ -119,6 +123,7 @@ async def list_issues(project: str, status: str = "open", assigned_to: str | Non
     if wanted not in ("open", "closed", "all") and not named:
         raise ValueError(f"No status {status!r}. Statuses: {', '.join(s['name'] for s in statuses)}.")
     issues = await t.call("GET", "/issues", params={"project": pid})
+    who = (assigned_to or "").strip().lower()
 
     def keep(issue: dict) -> bool:
         if wanted == "open" and issue["status"] in closed:
@@ -127,7 +132,10 @@ async def list_issues(project: str, status: str = "open", assigned_to: str | Non
             return False
         if named and issue["status"] not in named:
             return False
-        if assigned_to and assigned_to.strip().lower() not in _person(issue.get("assigned_to_extra_info")).lower():
+        assignee = (issue.get("assigned_to_extra_info") or {}).get("full_name_display") or ""
+        if who in NOBODY and assignee:
+            return False
+        if who and who not in NOBODY and who not in assignee.lower():
             return False
         return not search or search.strip().lower() in issue["subject"].lower()
 
@@ -162,10 +170,15 @@ async def get_issue(project: str, ref: int) -> list:
     lines += ["", f"Attachments ({len(attachments)}):"]
     images: list = []
     for a in attachments:
-        lines.append(f"- {a['name']} ({a.get('size', 0)} bytes)")
+        size = a.get("size") or 0
+        line = f"- {a['name']} ({size} bytes)"
         kind = IMAGE_TYPES.get(Path(a["name"]).suffix.lower())
-        if kind and len(images) < MAX_IMAGES and a.get("size", 0) <= MAX_IMAGE_BYTES:
-            images.append(Image(data=await t.download(a["url"]), format=kind))
+        if kind and len(images) < MAX_IMAGES and size <= MAX_IMAGE_BYTES:
+            try:
+                images.append(Image(data=await t.download(a["url"]), format=kind))
+            except httpx.HTTPError:
+                line += " (could not be loaded)"
+        lines.append(line)
     return ["\n".join(lines), *images]
 
 
@@ -200,14 +213,16 @@ async def set_status(project: str, ref: int, status: str) -> str:
 async def assign_issue(project: str, ref: int, person: str) -> str:
     """Assign an issue to one of the project's members, found by part of their name (e.g. "Devika"). "unassigned" takes the
     assignee off. Two or more members matching is refused, naming them, so the right one can be given."""
+    wanted = person.strip().lower()
+    if not wanted:
+        raise ValueError('No name given. Use "unassigned" to take the assignee off.')
     t = taiga()
     i = await t.issue(project, ref)
     before = _person(i.get("assigned_to_extra_info"))
-    wanted = person.strip().lower()
-    if wanted in ("unassigned", "nobody", "none"):
+    if wanted in NOBODY:
         user_id, name = None, "unassigned"
     else:
-        members = [m for m in await t.call("GET", "/memberships", params={"project": i["project"]}) if m.get("user") and m.get("full_name")]
+        members = [m for m in await t.call("GET", "/memberships", params={"project": i["project"]}) if m.get("user") and m.get("full_name") and m.get("is_user_active", True)]
         found = [m for m in members if m["full_name"].lower() == wanted] or [m for m in members if wanted in m["full_name"].lower()]
         if not found:
             raise ValueError(f"No member matches {person!r}. Members: {', '.join(sorted(m['full_name'] for m in members))}.")
@@ -217,6 +232,8 @@ async def assign_issue(project: str, ref: int, person: str) -> str:
     if user_id == i.get("assigned_to"):
         return f"#{i['ref']} is already {'unassigned' if user_id is None else f'assigned to {name}'}."
     await t.call("PATCH", f"/issues/{i['id']}", json={"assigned_to": user_id, "version": i["version"]})
+    if user_id is None:
+        return f"Unassigned #{i['ref']} (was {before})."
     return f"Assigned #{i['ref']} to {name} (was {before})."
 
 

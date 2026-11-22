@@ -1,7 +1,7 @@
 [project]
 name = "taiga-mcp-lite"
 version = "0.1.0"
-description = "A small stdio MCP server for Taiga: list issues, read one with comments and screenshots, comment, change status."
+description = "A small stdio MCP server for Taiga: list issues, read one with comments and screenshots, comment, change status, assign."
 requires-python = ">=3.12"
 # mcp 2 renamed FastMCP; this uses the 1.x API.
 dependencies = ["mcp>=1.30,<2", "httpx>=0.27", "python-dotenv>=1.0"]
