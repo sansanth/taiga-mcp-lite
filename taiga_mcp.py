@@ -196,5 +196,29 @@ async def set_status(project: str, ref: int, status: str) -> str:
     return f"Moved #{i['ref']} from {before} to {match['name']}."
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True))
+async def assign_issue(project: str, ref: int, person: str) -> str:
+    """Assign an issue to one of the project's members, found by part of their name (e.g. "Devika"). "unassigned" takes the
+    assignee off. Two or more members matching is refused, naming them, so the right one can be given."""
+    t = taiga()
+    i = await t.issue(project, ref)
+    before = _person(i.get("assigned_to_extra_info"))
+    wanted = person.strip().lower()
+    if wanted in ("unassigned", "nobody", "none"):
+        user_id, name = None, "unassigned"
+    else:
+        members = [m for m in await t.call("GET", "/memberships", params={"project": i["project"]}) if m.get("user") and m.get("full_name")]
+        found = [m for m in members if m["full_name"].lower() == wanted] or [m for m in members if wanted in m["full_name"].lower()]
+        if not found:
+            raise ValueError(f"No member matches {person!r}. Members: {', '.join(sorted(m['full_name'] for m in members))}.")
+        if len(found) > 1:
+            raise ValueError(f"{person!r} matches {len(found)} members: {', '.join(sorted(m['full_name'] for m in found))}. Give more of the name.")
+        user_id, name = found[0]["user"], found[0]["full_name"]
+    if user_id == i.get("assigned_to"):
+        return f"#{i['ref']} is already {'unassigned' if user_id is None else f'assigned to {name}'}."
+    await t.call("PATCH", f"/issues/{i['id']}", json={"assigned_to": user_id, "version": i["version"]})
+    return f"Assigned #{i['ref']} to {name} (was {before})."
+
+
 if __name__ == "__main__":
     mcp.run()

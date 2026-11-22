@@ -12,6 +12,7 @@ It runs over stdio: the client starts it when needed, so there is no server to k
 | `get_issue` | One issue by its number: details, description, every comment, and its image attachments as images | No |
 | `add_comment` | Posts a comment, exactly as given; changes nothing else on the issue | Yes |
 | `set_status` | Moves an issue to a status by its name ("Ready for test") | Yes |
+| `assign_issue` | Assigns an issue to a project member found by part of their name, or `unassigned`; two matching members are refused | Yes |
 
 A project can be named by its slug, its name or its id.
 
@@ -40,10 +41,10 @@ A Taiga account of its own, with access only to the projects it needs, is the sa
 claude mcp add --scope user taiga -- "$PWD/.venv/bin/python" "$PWD/taiga_mcp.py"
 ```
 
-To be asked every time before a comment or status change, add the write tools to the `ask` list in `~/.claude/settings.json`:
+To be asked every time before a comment, status change or assignment, add the write tools to the `ask` list in `~/.claude/settings.json`:
 
 ```json
-{ "permissions": { "ask": ["mcp__taiga__add_comment", "mcp__taiga__set_status"] } }
+{ "permissions": { "ask": ["mcp__taiga__add_comment", "mcp__taiga__set_status", "mcp__taiga__assign_issue"] } }
 ```
 
 ## Test

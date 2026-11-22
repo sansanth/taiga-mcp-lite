@@ -8,7 +8,8 @@ import pytest
 import taiga_mcp
 
 STATUSES = [{"id": 1, "name": "New", "is_closed": False}, {"id": 2, "name": "Ready for test", "is_closed": False}, {"id": 3, "name": "Closed", "is_closed": True}]
-ISSUE = {"id": 1028, "ref": 42, "project": 22, "subject": "Mic missing", "status": 1, "version": 7, "status_extra_info": {"name": "New"}}
+ISSUE = {"id": 1028, "ref": 42, "project": 22, "subject": "Mic missing", "status": 1, "version": 7, "status_extra_info": {"name": "New"}, "assigned_to": None}
+MEMBERS = [{"user": 5, "full_name": "John Carver"}, {"user": 6, "full_name": "Adam Hollis"}, {"user": 7, "full_name": "Adam Brierley"}, {"user": None, "full_name": "Sam Invited"}]
 
 
 @pytest.fixture
@@ -31,6 +32,8 @@ def taiga(monkeypatch):
         sent.append((request.method, path, body))
         if path == "/issues/by_ref":
             return httpx.Response(200, json=ISSUE)
+        if path == "/memberships":
+            return httpx.Response(200, json=MEMBERS)
         if path == "/issue-statuses":
             return httpx.Response(200, json=STATUSES)
         if path == "/issues/1028" and request.method == "PATCH":
@@ -70,3 +73,15 @@ async def test_a_refused_token_is_renewed_once(taiga):
     logins["expire_first"] = True
     await taiga_mcp.add_comment("22", 42, "Hello")
     assert logins["count"] == 2 and sent[-1][0] == "PATCH"
+
+
+async def test_an_issue_is_assigned_by_part_of_a_name_and_two_matches_are_refused(taiga):
+    sent, _ = taiga
+    assert await taiga_mcp.assign_issue("22", 42, "john") == "Assigned #42 to John Carver (was unassigned)."
+    assert sent[-1] == ("PATCH", "/issues/1028", {"assigned_to": 5, "version": 7})
+    with pytest.raises(ValueError, match="Adam Brierley, Adam Hollis"):
+        await taiga_mcp.assign_issue("22", 42, "Adam")
+    with pytest.raises(ValueError, match="No member matches 'Sam'"):
+        await taiga_mcp.assign_issue("22", 42, "Sam")  # an invitation not yet accepted is no one to assign
+    assert await taiga_mcp.assign_issue("22", 42, "unassigned") == "#42 is already unassigned."
+    assert [s for s in sent if s[0] == "PATCH"] == [("PATCH", "/issues/1028", {"assigned_to": 5, "version": 7})]
